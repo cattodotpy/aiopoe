@@ -2,6 +2,7 @@ import aiohttp
 import asyncio
 from dataclasses import dataclass, field
 from typing import Literal
+import os
 
 URL = "https://www.quora.com/poe_api/gql_POST"
 HEADERS = {
@@ -30,6 +31,7 @@ class PoeModel:
 class QuoraAuth:
     formkey: str
     cookie: str
+    proxies: dict = None
     headers: dict = None
 
     def __post_init__(self):
@@ -60,7 +62,14 @@ class ChatSession:
     @classmethod
     async def create(cls, model: PoeModel, auth: QuoraAuth):
         self = cls(model, auth)
-        self.session = aiohttp.ClientSession(headers=auth())
+        if auth.proxies:
+            assert "http" in auth.proxies and "https" in auth.proxies, "Proxies must contain both http and https"
+            os.environ["HTTP_PROXY"] = auth.proxies["http"]
+            os.environ["HTTPS_PROXY"] = auth.proxies["https"]
+
+        self.session = aiohttp.ClientSession(headers=auth(), trust_env=bool(auth.proxies))
+
+
         data = {
             'operationName': 'ChatViewQuery',
             'query': 'query ChatViewQuery($bot: String!) {\n  chatOfBot(bot: $bot) {\n    __typename\n    ...ChatFragment\n  }\n}\nfragment ChatFragment on Chat {\n  __typename\n  id\n  chatId\n  defaultBotNickname\n  shouldShowDisclaimer\n}',
@@ -102,7 +111,7 @@ class ChatSession:
         async with self.session.post(URL, json=data) as resp:
             return await resp.json()
     
-    async def retrieve_last_message(self) -> dict:
+    async def retrieve_last_message(self, stream: bool = False) -> dict:
         data = {
             "operationName": "ChatPaginationQuery",
             "query": "query ChatPaginationQuery($bot: String!, $before: String, $last: Int! = 10) {\n  chatOfBot(bot: $bot) {\n    id\n    __typename\n    messagesConnection(before: $before, last: $last) {\n      __typename\n      pageInfo {\n        __typename\n        hasPreviousPage\n      }\n      edges {\n        __typename\n        node {\n          __typename\n          ...MessageFragment\n        }\n      }\n    }\n  }\n}\nfragment MessageFragment on Message {\n  id\n  __typename\n  messageId\n  text\n  linkifiedText\n  authorNickname\n  state\n  vote\n  voteReason\n  creationTime\n}",
